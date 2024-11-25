@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+name: Main Build
+
+on:
+  workflow_call:
+    inputs:
+      maven-version:
+        description: The Maven version to use
+        required: false
+        default: '3.9.9'
+        type: string
+
+# allow single build per branch or PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# clare all permissions for GITHUB_TOKEN
+permissions: {}
+
+jobs:
+
+  prepare:
+    name: Preparation steps
+    runs-on: ubuntu-latest
+    # transfer from steps output to job output
+    outputs:
+      jdks: ${{ steps.read-module-descriptor.outputs.jdks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # this reads the module descriptor 
+      - name: Read .sling-module.json
+        id: read-module-descriptor
+        run: |
+          {
+            echo 'SLING_MODULE<<EOF'
+            cat ./sling-module.json
+            echo EOF
+          } >> "$GITHUB_ENV"
+      # ...and stores relevant pieces in the step outputs
+      - name: Populate env with parsed data
+        run: |
+          # evaluate json https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/evaluate-expressions-in-workflows-and-actions#fromjson 
+          echo jdks=${{fromJson(steps.read-module-descriptor.outputs.SLING_MODULE).jenkins.jdks}} >> $GITHUB_ENV
+      
+  # prepare matrix data for verify step
+  build:
+    runs-on: ubuntu-latest
+    needs: prepare
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{needs.prepare.outputs.jdks}}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Set up Maven
+        # https://maven.apache.org/wrapper/#using-a-different-version-of-maven
+        run: mvn --errors --batch-mode --show-version org.apache.maven.plugins:maven-wrapper-plugin:3.3.2:wrapper "-Dmaven=${{ inputs.maven-version}}"
+
+      - name: Build with Maven
+        run: ./mvnw --errors --batch-mode --show-version clean verify
